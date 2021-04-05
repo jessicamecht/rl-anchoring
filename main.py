@@ -8,16 +8,15 @@ from models import *
 import csv 
 import numpy as np
 import matplotlib.pyplot as plt 
-#####CONFIG#########################################
 
+#####CONFIG#########################################
 batch_size = 10 
 gamma = 0.99
 eps_start = 0.9
 eps_end = 0.05
 eps_decay = 200
-target_update = 10
-
 ####################################################
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 '''Pseudocode:
@@ -28,10 +27,13 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 2.3 get next state - next student (terminal is last student of sequence)
 2.4 observe reward
 2.5 store transition (state, action, reward, next_state)
-2.6 sample last sequence of transitions 
+2.6 sample last sequences of transitions 
 2.7 set y = r if terminal state else r + max Q(state, a, theta) (Bellman equation)
-
+2.8 compute loss and descent
+3. Update target net 
 '''
+
+
 def select_action(steps_done, eps_end, eps_start, eps_decay, policy_net, state, n_actions=2):
     '''selects the next action to be executed based on the current student shown
     actions can be 0: rejection, 1:admission
@@ -50,6 +52,9 @@ def select_action(steps_done, eps_end, eps_start, eps_decay, policy_net, state, 
         return steps_done + 1, torch.tensor([[random.randrange(n_actions)]], device=device, dtype=torch.long)
 
 def optimize_model(batch_size, memory, policy_net, target_net):
+    '''optimizes the model by taking a batch of experiences from memory and computing the
+    loss between the expected q values and the current q values with L1 loss'''
+
     batch_size = min(len(memory.memory), batch_size)
 
     transitions = memory.sample(batch_size)
@@ -85,52 +90,61 @@ def optimize_model(batch_size, memory, policy_net, target_net):
 
     loss = F.smooth_l1_loss(state_action_values, expected_state_action_values.unsqueeze(1))
     loss.backward()
+
     for param in policy_net.parameters():
         param.grad.data.clamp_(-1, 1)
     return loss 
     
 def load_data():
+    '''loads data in format:
+    "reviewer: [timestamp, target_grade, target_decision, [features]]
+    features are GPA, SAT, ...
+    target_grade is the rating which was given to the student by this reviewer
+    target_decision is if the student was actually admitted  
+    '''
     read_dictionary = np.load('../admissions.npy',allow_pickle='TRUE').item()
     return read_dictionary
 
 def main():
+    ### Init Data ###################################
     data = load_data()
-
-    train_keys = list(data.keys())[0:-20]
-    valid_keys = list(data.keys())[-20:-10]
-    test_keys = list(data.keys())[-10:]
     n_actions = 2
     _, _, _, data_instance = data["reviewer_0"][0][-1]
     input_size = len(data_instance)
-    policy_net = DQN(input_size, n_actions).to(device)
-    target_net = DQN(input_size, n_actions).to(device)
-    target_net.load_state_dict(policy_net.state_dict())
-    target_net.eval()
+    keys = np.array(list(data.keys()))
+    n_folds = 10
+    folds = np.array_split(keys, n_folds) #10-fold cross validation 
+    
+    for i in range(n_folds-1):
+        ### Load Models ###################################
+        policy_net = DQN(input_size, n_actions).to(device)
+        target_net = DQN(input_size, n_actions).to(device)
+        target_net.load_state_dict(policy_net.state_dict())
+        target_net.eval()
 
-    optimizer = optim.RMSprop(policy_net.parameters())
-    memory = ReplayMemory(10000)
+        ### Init Optimizer and Memory ###################################
+        optimizer = optim.RMSprop(policy_net.parameters())
+        memory = ReplayMemory(10000)
 
-    steps_done = 0
-    _ = train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_decay, policy_net, target_net, optimizer, memory)
-    #test(data, test_keys, target_net)
-    #plt.plot(losses)
-    #plt.savefig('./figures/losses.png')  
+        first_part = [item for sublist in folds[0:i] for item in sublist] 
+        second_part = [item for sublist in folds[i+2:] for item in sublist] if len(folds) > i+2 else []
+        train_keys = first_part + second_part 
+        valid_keys = folds[i] 
+        test_keys = folds[i+1]
+        steps_done = 0
+    
+        _ = train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_decay, policy_net, target_net, optimizer, memory)
+        validate(data, test_keys, target_net)
 
 def reward(action, target_decision):
+    '''calculates the reward for the current decision'''
     action = action.item()
     target_decision = int(target_decision)
     return int(action==target_decision)
 
-def test(data, test_keys, target_net):
-    cum_reward = 0
-    for reviewer in data:
-        if reviewer not in train_keys:
-            continue
-        for review_session in data[reviewer]:
-            for idx, student in enumerate(review_session):
-                timestamp, target_grade, target_decision, features = student
 
 def validate(data, valid_keys, target_net):
+    '''sends unseen data into the target net and observes the average validation reward on this data'''
     target_net.eval()
     cum_reward = 0
     num_reviews = 0 
@@ -141,6 +155,7 @@ def validate(data, valid_keys, target_net):
             for idx, student in enumerate(review_session):
                 
                 timestamp, target_grade, target_decision, features = student
+                target_decision = int(target_grade>1)
                 if target_decision is None:
                         continue
                 features = torch.Tensor(features).to(device).unsqueeze(0)
@@ -153,9 +168,12 @@ def validate(data, valid_keys, target_net):
     
 
 def train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_decay, policy_net, target_net, optimizer, memory):
-
+    '''main training function 
+    iterates over all reviewers and each review session 
+    for each student of the review session, 
+    '''
     losses_all = []
-    num_episodes = 50
+    num_episodes = 1
     for i_episode in range(num_episodes):
         missing_decisions = 0
         losses = []
@@ -170,6 +188,7 @@ def train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_deca
             for review_session in data[reviewer]:
                 for idx, student in enumerate(review_session):
                     timestamp, target_grade, target_decision, features = student
+                    target_decision = int(target_grade>1)
                     if target_decision is None:
                         missing_decisions+=1
                         continue
