@@ -33,6 +33,49 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 3. Update target net 
 '''
 
+def load_data():
+    '''loads data in format:
+    "reviewer: [timestamp, target_grade, target_decision, [features]]
+    features are GPA, SAT, ...
+    target_grade is the rating which was given to the student by this reviewer
+    target_decision is if the student was actually admitted  
+    '''
+    read_dictionary = np.load('../admissions.npy',allow_pickle='TRUE').item()
+    return read_dictionary
+
+def main():
+    ### Init Data ###################################
+    data = load_data()
+    n_actions = 2
+    _, _, _, data_instance = data["reviewer_0"][0][-1]
+    input_size = len(data_instance)
+    keys = np.array(list(data.keys()))
+    n_folds = 10
+    folds = np.array_split(keys, n_folds) #10-fold cross validation 
+    
+    for i in range(n_folds-1):
+        ### Load Models ###################################
+        policy_net = DQN(input_size, n_actions).to(device)
+        target_net = DQN(input_size, n_actions).to(device)
+        target_net.load_state_dict(policy_net.state_dict())
+        target_net.eval()
+
+        ### Init Optimizer and Memory ###################################
+        optimizer = optim.RMSprop(policy_net.parameters())
+        memory = ReplayMemory(10000)
+
+        first_part = [item for sublist in folds[0:i] for item in sublist] 
+        second_part = [item for sublist in folds[i+2:] for item in sublist] if len(folds) > i+2 else []
+        train_keys = first_part + second_part 
+        valid_keys = folds[i] 
+        test_keys = folds[i+1]
+        steps_done = 0
+    
+        _ = train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_decay, policy_net, target_net, optimizer, memory)
+        
+        validate(data, valid_keys, target_net)
+        validate(data, test_keys, target_net)
+
 
 def select_action(steps_done, eps_end, eps_start, eps_decay, policy_net, state, n_actions=2):
     '''selects the next action to be executed based on the current student shown
@@ -94,47 +137,6 @@ def optimize_model(batch_size, memory, policy_net, target_net):
     for param in policy_net.parameters():
         param.grad.data.clamp_(-1, 1)
     return loss 
-    
-def load_data():
-    '''loads data in format:
-    "reviewer: [timestamp, target_grade, target_decision, [features]]
-    features are GPA, SAT, ...
-    target_grade is the rating which was given to the student by this reviewer
-    target_decision is if the student was actually admitted  
-    '''
-    read_dictionary = np.load('../admissions.npy',allow_pickle='TRUE').item()
-    return read_dictionary
-
-def main():
-    ### Init Data ###################################
-    data = load_data()
-    n_actions = 2
-    _, _, _, data_instance = data["reviewer_0"][0][-1]
-    input_size = len(data_instance)
-    keys = np.array(list(data.keys()))
-    n_folds = 10
-    folds = np.array_split(keys, n_folds) #10-fold cross validation 
-    
-    for i in range(n_folds-1):
-        ### Load Models ###################################
-        policy_net = DQN(input_size, n_actions).to(device)
-        target_net = DQN(input_size, n_actions).to(device)
-        target_net.load_state_dict(policy_net.state_dict())
-        target_net.eval()
-
-        ### Init Optimizer and Memory ###################################
-        optimizer = optim.RMSprop(policy_net.parameters())
-        memory = ReplayMemory(10000)
-
-        first_part = [item for sublist in folds[0:i] for item in sublist] 
-        second_part = [item for sublist in folds[i+2:] for item in sublist] if len(folds) > i+2 else []
-        train_keys = first_part + second_part 
-        valid_keys = folds[i] 
-        test_keys = folds[i+1]
-        steps_done = 0
-    
-        _ = train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_decay, policy_net, target_net, optimizer, memory)
-        validate(data, test_keys, target_net)
 
 def reward(action, target_decision):
     '''calculates the reward for the current decision'''
@@ -154,10 +156,8 @@ def validate(data, valid_keys, target_net):
         for review_session in data[reviewer]:
             for idx, student in enumerate(review_session):
                 
-                timestamp, target_grade, target_decision, features = student
-                target_decision = int(target_grade>1)
-                if target_decision is None:
-                        continue
+                timestamp, target_decision, final_decision, features = student
+                target_decision = int(target_decision>1)
                 features = torch.Tensor(features).to(device).unsqueeze(0)
 
                 output = target_net(features)
@@ -172,6 +172,7 @@ def train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_deca
     iterates over all reviewers and each review session 
     for each student of the review session, 
     '''
+    target_net.train()
     losses_all = []
     num_episodes = 1
     for i_episode in range(num_episodes):
@@ -187,11 +188,8 @@ def train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_deca
                 continue
             for review_session in data[reviewer]:
                 for idx, student in enumerate(review_session):
-                    timestamp, target_grade, target_decision, features = student
-                    target_decision = int(target_grade>1)
-                    if target_decision is None:
-                        missing_decisions+=1
-                        continue
+                    timestamp, target_decision, final_decision, features = student
+                    target_decision = int(target_decision>1)
                     features = torch.Tensor(features).to(device).unsqueeze(0)
                     steps_done, action = select_action(steps_done, eps_end, eps_start, eps_decay, policy_net, features)
                     curr_reward = torch.tensor([reward(action, target_decision)], device=device)
@@ -211,7 +209,6 @@ def train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_deca
         print('average train reward: ', all_rewards/all_reviews)
         target_net.load_state_dict(policy_net.state_dict())
         losses_all.append(losses)
-        validate(data, valid_keys, target_net)
         #print(missing_decisions, " missing decisions for ", steps_done, " steps done")
     return losses_all
 
