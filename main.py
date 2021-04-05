@@ -183,7 +183,6 @@ def train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_deca
         for reviewer in data:
             cum_reward = 0
             number_reviews = 0
-
             if reviewer not in train_keys:
                 continue
             for review_session in data[reviewer]:
