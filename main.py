@@ -23,14 +23,17 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 1. for each reviewer, sample review session
 2. for each review session, sample student 
 2.1 send student through NN 
-2.2 obtain action to take - admission decision with expl-exploit
+2.1.1 send all past reviewed students through anchoring net and obtain anchoring factor
+
+2.2 obtain action to take weighted by anchoring factor - admission decision with expl-exploit
+
 2.3 get next state - next student (terminal is last student of sequence)
-2.4 observe reward
+2.4 observe reward and use to update anchor net 
 2.5 store transition (state, action, reward, next_state)
 2.6 sample last sequences of transitions 
 2.7 set y = r if terminal state else r + max Q(state, a, theta) (Bellman equation)
 2.8 compute loss and descent
-3. Update target net 
+2.9 Update target net 
 '''
 
 def load_data():
@@ -54,13 +57,16 @@ def main():
     folds = np.array_split(keys, n_folds) #10-fold cross validation 
     
     for i in range(n_folds-1):
+        print("Fold: ", i)
         ### Load Models ###################################
         policy_net = DQN(input_size, n_actions).to(device)
         target_net = DQN(input_size, n_actions).to(device)
+        anchoring_net = AnchorNet(input_size+1).to(device)
         target_net.load_state_dict(policy_net.state_dict())
         target_net.eval()
 
         ### Init Optimizer and Memory ###################################
+        anchor_optimizer = optim.Adam(anchoring_net.parameters(), lr=0.01)
         optimizer = optim.RMSprop(policy_net.parameters())
         memory = ReplayMemory(10000)
 
@@ -71,13 +77,13 @@ def main():
         test_keys = folds[i+1]
         steps_done = 0
     
-        _ = train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_decay, policy_net, target_net, optimizer, memory)
+        _ = train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_decay, policy_net, target_net, anchoring_net, optimizer, anchor_optimizer, memory)
         
         validate(data, valid_keys, target_net)
         validate(data, test_keys, target_net)
 
 
-def select_action(steps_done, eps_end, eps_start, eps_decay, policy_net, state, n_actions=2):
+def select_action(steps_done, eps_end, eps_start, eps_decay, policy_net, state, anchor, n_actions=2):
     '''selects the next action to be executed based on the current student shown
     actions can be 0: rejection, 1:admission
     '''
@@ -90,7 +96,7 @@ def select_action(steps_done, eps_end, eps_start, eps_decay, policy_net, state, 
             # second column on max result is index of where max element was
             # found, so we pick action with the larger expected reward.
             output = policy_net(state) #
-            return steps_done + 1, output.max(1)[1].view(1, 1)
+            return steps_done + 1, torch.tensor(output.max(1)[1].view(1, 1) * anchor, dtype=torch.int64, device=device)
     else:
         return steps_done + 1, torch.tensor([[random.randrange(n_actions)]], device=device, dtype=torch.long)
 
@@ -144,6 +150,11 @@ def reward(action, target_decision):
     target_decision = int(target_decision)
     return int(action==target_decision)
 
+def anchor_loss(anchor, prediction, target):
+    action = torch.tensor(prediction.max(1)[1].view(1, 1) * anchor, dtype=torch.int64, device=device)
+
+    loss = -1* (target-anchor*action)
+    return loss 
 
 def validate(data, valid_keys, target_net):
     '''sends unseen data into the target net and observes the average validation reward on this data'''
@@ -167,14 +178,13 @@ def validate(data, valid_keys, target_net):
     print("average validation reward: ", cum_reward/num_reviews)
     
 
-def train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_decay, policy_net, target_net, optimizer, memory):
+def train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_decay, policy_net, target_net, anchoring_net, optimizer, anchor_optimizer, memory):
     '''main training function 
     iterates over all reviewers and each review session 
     for each student of the review session, 
     '''
-    target_net.train()
     losses_all = []
-    num_episodes = 1
+    num_episodes = 3
     for i_episode in range(num_episodes):
         missing_decisions = 0
         losses = []
@@ -185,27 +195,55 @@ def train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_deca
             number_reviews = 0
             if reviewer not in train_keys:
                 continue
+            anchors = []
             for review_session in data[reviewer]:
+                past_students = []
                 for idx, student in enumerate(review_session):
+
                     timestamp, target_decision, final_decision, features = student
+                    if target_decision is None or final_decision is None:
+                        continue
+
                     target_decision = int(target_decision>1)
+                    past_students.append(features + [target_decision])
+
                     features = torch.Tensor(features).to(device).unsqueeze(0)
-                    steps_done, action = select_action(steps_done, eps_end, eps_start, eps_decay, policy_net, features)
-                    curr_reward = torch.tensor([reward(action, target_decision)], device=device)
+
+                    past_reviewed_students = torch.tensor(past_students, device=device)
+                    anchor = anchoring_net(past_reviewed_students)
+
+                    steps_done, action = select_action(steps_done, eps_end, eps_start, eps_decay, policy_net, features, anchor.item())
+
+                    curr_reward = torch.tensor([reward(action, final_decision)], device=device)
+                    cum_reward+=curr_reward.item()
+                    number_reviews+=1
+                    
                     next_student = review_session[idx+1] if idx+1<len(review_session) else (_, _, _, None)
                     _, _, _, next_student = next_student
                     next_student = torch.Tensor(next_student).to(device).unsqueeze(0) if next_student != None else None
+
                     memory.push(features, action, next_student, curr_reward)
-                    cum_reward+=curr_reward.item()
-                    number_reviews+=1
+
                     optimizer.zero_grad()
                     loss = optimize_model(batch_size, memory, policy_net, target_net)
                     losses.append(loss.item())
                     optimizer.step()
+                    anchors.append(anchor.item())
+
+                    with torch.no_grad():
+                        prediction = policy_net(features)
+                    anchor_optimizer.zero_grad()
+                    anchor_loss_value = anchor_loss(anchor, prediction, target_decision)
+                    anchor_loss_value.backward()
+                    anchor_optimizer.step()
+            print('anchors for review session', anchors)
+
             all_rewards+=cum_reward
             all_reviews+=number_reviews
             #print('Average reward for ', reviewer, ": ", cum_reward/number_reviews, "who reviewed ", number_reviews, " students for episode: ", i_episode)
         print('average train reward: ', all_rewards/all_reviews)
+        validate(data, valid_keys, target_net)
+
         target_net.load_state_dict(policy_net.state_dict())
         losses_all.append(losses)
         #print(missing_decisions, " missing decisions for ", steps_done, " steps done")

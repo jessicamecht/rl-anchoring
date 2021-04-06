@@ -44,3 +44,26 @@ class DQN(nn.Module):
         x = self.activation(self.fc3(x))
         x = torch.sigmoid(self.fc4(x))
         return x
+
+class AnchorNet(nn.Module):
+    def __init__(self, input_size):
+        super(AnchorNet, self).__init__()
+        self.fc1 = nn.Linear(input_size, 64)
+        self.activation = nn.ReLU()
+        self.fc2 = nn.Linear(64, 16)
+        self.fc3 = nn.Linear(16,8)
+        self.fc4 = nn.Linear(8,1)
+        
+    def forward(self,input_x):
+        '''anchor net takes in a batch of student features 
+        and past decisions and learns an anchoring score'''
+        x = self.activation(self.fc1(input_x))
+        x = self.activation(self.fc2(x))
+        x = self.activation(self.fc3(x))
+        x = torch.tanh(self.fc4(x))
+        # negative anchoring_factor means negative anchoring bias (has seen lots of bad students)
+        # positive anchoring_factor means positive anchoring bias (has seen lots of good students)
+
+        x = x+1
+        anchoring_factor = x.sum()/input_x.shape[0]
+        return anchoring_factor
