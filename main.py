@@ -62,12 +62,13 @@ def main():
         policy_net = DQN(input_size, n_actions).to(device)
         target_net = DQN(input_size, n_actions).to(device)
         anchoring_net = AnchorNet(input_size+1).to(device)
+        anchor_param = nn.Parameter(torch.ones(1), requires_grad=True).to(device).detach().requires_grad_(True)
         target_net.load_state_dict(policy_net.state_dict())
         target_net.eval()
 
         ### Init Optimizer and Memory ###################################
         anchor_optimizer = optim.Adam(anchoring_net.parameters(), lr=0.01)
-        optimizer = optim.RMSprop(policy_net.parameters())
+        optimizer = optim.RMSprop(list(policy_net.parameters()))# + [anchor_param])
         memory = ReplayMemory(10000)
 
         first_part = [item for sublist in folds[0:i] for item in sublist] 
@@ -77,10 +78,10 @@ def main():
         test_keys = folds[i+1]
         steps_done = 0
     
-        _ = train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_decay, policy_net, target_net, anchoring_net, optimizer, anchor_optimizer, memory)
+        _ = train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_decay, policy_net, target_net, anchoring_net, optimizer, anchor_optimizer, anchor_param, memory)
         
         validate(data, valid_keys, target_net)
-        validate(data, test_keys, target_net)
+        validate(data, test_keys, target_net, label="test")
 
 
 def select_action(steps_done, eps_end, eps_start, eps_decay, policy_net, state, anchor, n_actions=2):
@@ -156,7 +157,7 @@ def anchor_loss(anchor, prediction, target):
     loss = -1* (target-anchor*action)
     return loss 
 
-def validate(data, valid_keys, target_net):
+def validate(data, valid_keys, target_net, label="validation"):
     '''sends unseen data into the target net and observes the average validation reward on this data'''
     target_net.eval()
     cum_reward = 0
@@ -175,16 +176,16 @@ def validate(data, valid_keys, target_net):
                 action = output.max(1)[1].view(1, 1)
                 cum_reward += torch.tensor([reward(action, target_decision)], device=device).item()
                 num_reviews+=1
-    print("average validation reward: ", cum_reward/num_reviews)
+    print("average ", label, " reward: ", cum_reward/num_reviews)
     
 
-def train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_decay, policy_net, target_net, anchoring_net, optimizer, anchor_optimizer, memory):
+def train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_decay, policy_net, target_net, anchoring_net, optimizer, anchor_optimizer, anchor_param,  memory):
     '''main training function 
     iterates over all reviewers and each review session 
     for each student of the review session, 
     '''
     losses_all = []
-    num_episodes = 3
+    num_episodes = 1
     for i_episode in range(num_episodes):
         missing_decisions = 0
         losses = []
@@ -210,9 +211,10 @@ def train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_deca
                     features = torch.Tensor(features).to(device).unsqueeze(0)
 
                     past_reviewed_students = torch.tensor(past_students, device=device)
-                    anchor = anchoring_net(past_reviewed_students)
+                    #anchor = anchoring_net(past_reviewed_students)
+                    anchor = torch.ones(1).to(device)#anchor_param
 
-                    steps_done, action = select_action(steps_done, eps_end, eps_start, eps_decay, policy_net, features, anchor.item())
+                    steps_done, action = select_action(steps_done, eps_end, eps_start, eps_decay, policy_net, features, anchor)
 
                     curr_reward = torch.tensor([reward(action, final_decision)], device=device)
                     cum_reward+=curr_reward.item()
@@ -230,19 +232,19 @@ def train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_deca
                     optimizer.step()
                     anchors.append(anchor.item())
 
-                    with torch.no_grad():
+                    '''with torch.no_grad():
                         prediction = policy_net(features)
                     anchor_optimizer.zero_grad()
                     anchor_loss_value = anchor_loss(anchor, prediction, target_decision)
                     anchor_loss_value.backward()
-                    anchor_optimizer.step()
-            print('anchors for review session', anchors)
+                    anchor_optimizer.step()'''
+            #print('anchors for review session', anchors)
 
             all_rewards+=cum_reward
             all_reviews+=number_reviews
             #print('Average reward for ', reviewer, ": ", cum_reward/number_reviews, "who reviewed ", number_reviews, " students for episode: ", i_episode)
         print('average train reward: ', all_rewards/all_reviews)
-        validate(data, valid_keys, target_net)
+        #validate(data, valid_keys, target_net)
 
         target_net.load_state_dict(policy_net.state_dict())
         losses_all.append(losses)
