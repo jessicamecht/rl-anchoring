@@ -8,6 +8,7 @@ from models import *
 import csv 
 import numpy as np
 import matplotlib.pyplot as plt 
+from utils import * 
 
 #####CONFIG#########################################
 batch_size = 10 
@@ -35,16 +36,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 2.8 compute loss and descent
 2.9 Update target net 
 '''
-
-def load_data():
-    '''loads data in format:
-    "reviewer: [timestamp, target_grade, target_decision, [features]]
-    features are GPA, SAT, ...
-    target_grade is the rating which was given to the student by this reviewer
-    target_decision is if the student was actually admitted  
-    '''
-    read_dictionary = np.load('../admissions.npy',allow_pickle='TRUE').item()
-    return read_dictionary
 
 def main():
     ### Init Data ###################################

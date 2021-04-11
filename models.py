@@ -7,6 +7,7 @@ import torch.nn.functional as F
 
 Transition = namedtuple("Transition", ("state", "action", "next_state", "reward"))#a named tuple representing a single transition in our environment. maps (state, action) pairs to their (next_state, reward) result
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class ReplayMemory(object):
     '''a cyclic buffer of bounded size that holds the transitions observed recently'''
@@ -67,3 +68,22 @@ class AnchorNet(nn.Module):
         x = x+1
         anchoring_factor = x.sum()/input_x.shape[0]
         return anchoring_factor
+
+class AnchorLSTM(nn.Module):
+    '''AnchorLSTM takes in a sequence of ratings of students for the current reviewer and is 
+    supposed to learn the anchor in the current hidden state'''
+    def __init__(self, input_size, hidden_size, output_size=1):
+        super(AnchorLSTM, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+
+        self.lstm = nn.LSTM(input_size= input_size, hidden_size=hidden_size, batch_first=True)
+
+        self.linear = nn.Linear(hidden_size, output_size)
+
+    
+    def forward(self, x, h):
+        out, h = self.lstm(x, h)
+        predictions = self.linear(out)
+        return predictions, h
