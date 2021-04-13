@@ -159,7 +159,7 @@ def validate(data, valid_keys, target_net, label="validation"):
         for review_session in data[reviewer]:
             for idx, student in enumerate(review_session):
                 
-                timestamp, target_decision, final_decision, features = student
+                timestamp, target_decision, final_decision, features, svm_decision, svm_confidence = student
                 target_decision = int(target_decision>1)
                 features = torch.Tensor(features).to(device).unsqueeze(0)
 

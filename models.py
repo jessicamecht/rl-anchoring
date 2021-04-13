@@ -84,6 +84,5 @@ class AnchorLSTM(nn.Module):
 
     
     def forward(self, x, h):
-        out, h = self.lstm(x, h)
-        predictions = self.linear(out)
+        predictions, h = self.lstm(x, h)
         return predictions, h

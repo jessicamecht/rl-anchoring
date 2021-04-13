@@ -6,10 +6,13 @@ from itertools import count
 import math 
 from models import * 
 import csv 
+from utils import * 
 import numpy as np
 import matplotlib.pyplot as plt 
-from utils import * 
 import operator
+import random 
+import pandas as pd
+from resample import * 
 
 #####CONFIG#########################################
 batch_size = 10 
@@ -25,8 +28,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 1. send student features through svm to obtain score (already done)
 2. send student score sequences through lstm 
 3. the hidden states are the anchor 
-
-
 '''
 
 def main():
@@ -57,6 +58,8 @@ def main():
         train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn)
         eval_anchor(data, valid_keys, anchor_lstm)
 
+        heuristic_resample(data, anchor_lstm, valid_keys)
+
 def train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn):
     '''main training function 
     iterates over all reviewers and each review session 
@@ -76,8 +79,8 @@ def train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn):
             hidden_size=1
             
             for review_session in data[reviewer]:
-                hidden_anchor_states = (torch.zeros(1,1,hidden_size).to(device),
-                            torch.zeros(1,1,hidden_size).to(device))
+                hidden_anchor_states = (torch.zeros(1,1,hidden_size).to(device)+0.5,
+                            torch.zeros(1,1,hidden_size).to(device)+0.5) 
                 if len(review_session) == 1:
                     continue
                 anchor_lstm.zero_grad()
@@ -87,13 +90,14 @@ def train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn):
 
                 svm_decision_one_hot = torch.nn.functional.one_hot(svm_decision.to(torch.int64), num_classes=2).to(device)
 
-                svm_decision = torch.unsqueeze(torch.unsqueeze(svm_decision, 0), -1).to(device)
+                svm_decision = torch.unsqueeze(torch.unsqueeze(svm_decision, 0), -1).to(device) 
 
+                
 
-                reviewer_decision = torch.Tensor(np.array(review_session)[:,1] > 1).to(device).to(torch.int64)
-                student_prediction, _ = anchor_lstm(svm_decision,hidden_anchor_states)
+                reviewer_decision = torch.Tensor(np.array(review_session)[:,1] > 1).to(device).to(torch.int64) 
+                anchor, _ = anchor_lstm(svm_decision,hidden_anchor_states)
 
-                preds = student_prediction.squeeze(0) * svm_decision_one_hot
+                preds = anchor.squeeze(0) * svm_decision_one_hot
 
                 loss_ll = loss_fn(preds, reviewer_decision)
                 loss_ll.backward()
@@ -113,67 +117,52 @@ def eval_anchor(data, eval_keys, anchor_lstm):
     for each student of the review session, 
     '''
     anchor_lstm.eval()
-    num_epochs = 1
     num_decisions = 0
     num_correct = 0
     sum_bias = 0
-    for epoch in range(num_epochs):
-        for reviewer in data:
-            cum_reward = 0
-            number_reviews = 0
-            if reviewer not in eval_keys:
-                continue
-            hidden_size=1
+    for reviewer in data:
+        cum_reward = 0
+        number_reviews = 0
+        if reviewer not in eval_keys:
+            continue
+        hidden_size=1
             
-            for review_session in data[reviewer]:
-                hidden_anchor_states = (torch.zeros(1,1,hidden_size).to(device),
-                            torch.zeros(1,1,hidden_size).to(device))
-                if len(review_session) == 1:
-                    continue
-                anchor_lstm.zero_grad()
+        for review_session in data[reviewer]:
+            hidden_anchor_states = (torch.zeros(1,1,hidden_size).to(device)+0.5,
+                            torch.zeros(1,1,hidden_size).to(device)+0.5)
+            if len(review_session) == 1:
+                continue
 
-                svm_decision = np.array(review_session)[:,-2]
-                svm_decision = torch.Tensor(np.array(svm_decision, dtype=int))
+            svm_decision = np.array(review_session)[:,-2]
+            svm_decision = torch.Tensor(np.array(svm_decision, dtype=int))
 
-                svm_decision_one_hot = torch.nn.functional.one_hot(svm_decision.to(torch.int64), num_classes=2).to(device)
+            svm_decision_one_hot = torch.nn.functional.one_hot(svm_decision.to(torch.int64), num_classes=2).to(device)
 
-                svm_decision = torch.unsqueeze(torch.unsqueeze(svm_decision, 0), -1).to(device)
+            svm_decision = torch.unsqueeze(torch.unsqueeze(svm_decision, 0), -1).to(device)
+            reviewer_decision = torch.Tensor(np.array(review_session)[:,1] > 1).to(device).to(torch.int64)
+            anchor, _ = anchor_lstm(svm_decision,hidden_anchor_states)
+
+            norm_anch = normalize(anchor)
 
 
-                reviewer_decision = torch.Tensor(np.array(review_session)[:,1] > 1).to(device).to(torch.int64)
-                student_prediction, _ = anchor_lstm(svm_decision,hidden_anchor_states)
+            '''Analyze data
+            df = pd.DataFrame(norm_anch.cpu().detach().numpy(), columns = ['norm_anchor'])
+            df['reviewer_decision'] = reviewer_decision.cpu()
+            df['svm_decision'] = svm_decision.squeeze().cpu()
+            admission = np.array(review_session)[:,2]
+            df['admission'] = admission
+            print(df)'''
 
-                preds = student_prediction.squeeze(0) * svm_decision_one_hot
-
-                ### Accuracy ##########################################
-                decisions = torch.argmax(preds, dim=1) == reviewer_decision
-                correct = decisions.sum().item()
-                all_decisions = len(decisions)
-                num_decisions+= all_decisions
-                num_correct += correct
-                sum_bias+= torch.abs(student_prediction).sum()
-    print("Validation Accuracy: ", num_correct/num_decisions, "Average Absolute Anchor: ", sum_bias.item()/num_decisions)
-
-def heuristic_select_next_action(anchor, student_pool):
-    student_pool = enumerate(student_pool) 
-    rejects_mask = student_pool[:,1] == 0 
-    admit_mask = student_pool[:,1] == 1
-    reject = student_pool[rejects_mask]
-    admit = student_pool[admit_mask]
-    sorted_student_pool_reject = sorted(reject,  key = operator.itemgetter(2))
-    sorted_student_pool_admit = sorted(reject,  key = operator.itemgetter(2))
-    if anchor > 0.3:
-        #select a very bad student from student pool -> rejection with high confidence 
-        return sorted_student_pool_reject[0][0]
-    elif anchor < -0.3:
-        #select a very good student from student pool -> admission with high confidence 
-        return sorted_student_pool_admit[0][0]
-    elif anchor > -0.3 and anchor < 0:
-        #select an edge case student from student_pool to admit 
-        return sorted_student_pool_admit[0][-1]
-    elif anchor < 0.3 and anchor > 0:
-        #select an edge case student from student_pool to reject 
-        return sorted_student_pool_reject[0][-1]
+            preds = anchor.squeeze(0) * svm_decision_one_hot
+            ### Accuracy ##########################################
+            decisions = torch.argmax(preds, dim=1) == reviewer_decision
+            correct = decisions.sum().item()
+            all_decisions = len(decisions)
+            num_decisions+= all_decisions
+            num_correct += correct
+            sum_bias+= torch.abs(norm_anch).sum()
+    if num_decisions > 0:
+        print("Validation Accuracy: ", num_correct/num_decisions, "Average Absolute Anchor: ", sum_bias.item()/num_decisions)
 
 
 if __name__ == "__main__":
