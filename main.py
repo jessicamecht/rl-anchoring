@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 from itertools import count
 import math 
-from models import * 
+from models.models import * 
 import csv 
 import numpy as np
 import matplotlib.pyplot as plt 
@@ -41,7 +41,7 @@ def main():
     ### Init Data ###################################
     data = load_data()
     n_actions = 2
-    _, _, _, data_instance = data["reviewer_0"][0][-1]
+    _, _, _, data_instance,_ ,_ = data["reviewer_0"][0][-1]
     input_size = len(data_instance)
     keys = np.array(list(data.keys()))
     n_folds = 10
@@ -192,7 +192,7 @@ def train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_deca
                 past_students = []
                 for idx, student in enumerate(review_session):
 
-                    timestamp, target_decision, final_decision, features = student
+                    timestamp, target_decision, final_decision, features, svm_decision, svm_confodence = student
                     if target_decision is None or final_decision is None:
                         continue
 
@@ -211,8 +211,8 @@ def train(data, train_keys, valid_keys, steps_done, eps_end, eps_start, eps_deca
                     cum_reward+=curr_reward.item()
                     number_reviews+=1
                     
-                    next_student = review_session[idx+1] if idx+1<len(review_session) else (_, _, _, None)
-                    _, _, _, next_student = next_student
+                    next_student = review_session[idx+1] if idx+1<len(review_session) else (_, _, _, None, _,_)
+                    _, _, _, next_student, _, _ = next_student
                     next_student = torch.Tensor(next_student).to(device).unsqueeze(0) if next_student != None else None
 
                     memory.push(features, action, next_student, curr_reward)
