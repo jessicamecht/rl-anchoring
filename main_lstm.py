@@ -39,7 +39,7 @@ def main():
     n_folds = 10
     folds = np.array_split(keys, n_folds) #10-fold cross validation 
     
-    for i in range(n_folds-1):
+    for i in range(n_folds-2):
         print("Fold: ", i)
         ### Load Models ###################################
         input_size = 1
@@ -54,13 +54,14 @@ def main():
         train_keys = [item for sublist in folds[0:i] for item in sublist]  + [item for sublist in folds[i+2:] for item in sublist] if len(folds) > i+2 else [] 
         valid_keys = folds[i] 
         test_keys = folds[i+1]
+        if train_keys != []:
     
-        train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn)
-        eval_anchor(data, valid_keys, anchor_lstm)
-        torch.save(anchor_lstm.state_dict(), './state_dicts/anchor_lstm.pt')
+            train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn)
+            eval_anchor(data, valid_keys, anchor_lstm)
+            torch.save(anchor_lstm.state_dict(), './state_dicts/anchor_lstm.pt')
 
-        #heuristic_resample(data, anchor_lstm, valid_keys)
-        #train_learned_resampling(data, train_keys, n_iters, anchor_lstm, action_size)
+            #heuristic_resample(data, anchor_lstm, valid_keys)
+            #train_learned_resampling(data, train_keys, n_iters, anchor_lstm, action_size)
 
 def train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn):
     '''main training function 
@@ -114,10 +115,6 @@ def train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn):
     print("Accuracy: ", num_correct/num_decisions)
 
 def eval_anchor(data, eval_keys, anchor_lstm):
-    '''main training function 
-    iterates over all reviewers and each review session 
-    for each student of the review session, 
-    '''
     anchor_lstm.eval()
     num_decisions = 0
     num_correct = 0
