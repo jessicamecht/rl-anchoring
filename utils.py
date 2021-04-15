@@ -37,7 +37,7 @@ def validate(data, valid_keys, target_net, label="validation"):
                 num_reviews+=1
     print("average ", label, " reward: ", cum_reward/num_reviews)
 
-def students_by_year(data, keys):
+def students_by_year(data, keys, return_len_students=False):
     all_students = []
     for reviewer in data:
         cum_reward = 0
@@ -57,4 +57,25 @@ def students_by_year(data, keys):
     year = ((np.array(sorted_students)[:,0]-min(np.array(sorted_students)[:,0]))/31557600).astype(int)
     clustered_reviews_by_year = np.split(sorted_students, np.unique(year, return_index=True)[1][1:])
     clustered_reviews_by_year = np.array(clustered_reviews_by_year)
-    return clustered_reviews_by_year
+    return clustered_reviews_by_year, len(sorted_students) if return_len_students else clustered_reviews_by_year
+
+def all_students_sorted_by_year(data, keys):
+    all_students = []
+    for reviewer in data:
+        cum_reward = 0
+        number_reviews = 0
+        if reviewer not in keys:
+            continue
+        hidden_size=1
+            
+        for review_session in data[reviewer]:
+            for idx, student in enumerate(review_session):
+                
+                timestamp, target_decision, final_decision, features, svm_decision, svm_confidence = student
+                all_students.append(student)
+    all_students = np.array(all_students)
+    min_timestamp = min(all_students[:,0])
+    sorted_students = np.array(sorted(all_students, key=lambda x: x[0]))
+    year = ((np.array(sorted_students)[:,0]-min(np.array(sorted_students)[:,0]))/31557600).astype(int)
+    sorted_students[:,0] = year
+    return sorted_students

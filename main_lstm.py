@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 from itertools import count
 import math 
-from models import * 
+from models.models import * 
 import csv 
 from utils import * 
 import numpy as np
@@ -34,7 +34,7 @@ def main():
     ### Init Data ###################################
     data = load_data()
     _, _, _, data_instance, _, _ = data["reviewer_0"][0][-1]
-    input_size = len(data_instance)
+    action_size = len(data_instance)
     keys = np.array(list(data.keys()))
     n_folds = 10
     folds = np.array_split(keys, n_folds) #10-fold cross validation 
@@ -57,8 +57,10 @@ def main():
     
         train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn)
         eval_anchor(data, valid_keys, anchor_lstm)
+        torch.save(anchor_lstm.state_dict(), './state_dicts/anchor_lstm.pt')
 
-        heuristic_resample(data, anchor_lstm, valid_keys)
+        #heuristic_resample(data, anchor_lstm, valid_keys)
+        #train_learned_resampling(data, train_keys, n_iters, anchor_lstm, action_size)
 
 def train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn):
     '''main training function 
@@ -79,8 +81,8 @@ def train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn):
             hidden_size=1
             
             for review_session in data[reviewer]:
-                hidden_anchor_states = (torch.zeros(1,1,hidden_size).to(device)+0.5,
-                            torch.zeros(1,1,hidden_size).to(device)+0.5) 
+                hidden_anchor_states = (torch.zeros(1,1,hidden_size).to(device),
+                            torch.zeros(1,1,hidden_size).to(device)) 
                 if len(review_session) == 1:
                     continue
                 anchor_lstm.zero_grad()
@@ -128,8 +130,8 @@ def eval_anchor(data, eval_keys, anchor_lstm):
         hidden_size=1
             
         for review_session in data[reviewer]:
-            hidden_anchor_states = (torch.zeros(1,1,hidden_size).to(device)+0.5,
-                            torch.zeros(1,1,hidden_size).to(device)+0.5)
+            hidden_anchor_states = (torch.zeros(1,1,hidden_size).to(device),
+                            torch.zeros(1,1,hidden_size).to(device))
             if len(review_session) == 1:
                 continue
 

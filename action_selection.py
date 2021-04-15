@@ -2,30 +2,18 @@ import torch
 import numpy as np
 from torch.distributions import Categorical
 
-def learned_select_next_action(state):
-    state = torch.from_numpy(state).float()
-    probs, state_value = model(state)
-
-    # create a categorical distribution over the list of probabilities of actions
-    m = Categorical(probs)
-
-    # and sample an action using the distribution
-    action = m.sample()
-
-    # save to action buffer
-    model.saved_actions.append(SavedAction(m.log_prob(action), state_value))
-
-    # the action to take (left or right)
-    return action.item()
-
-def heuristic_select_next_action(anchor, student_pool):
-    '''selects a student based on the anchoring score obtained buy the LSTM'''
+def sort_by_confidence(student_pool):
     rejects_mask = np.array(student_pool)[:,-2] == 0 # select based on SVM score 
     admit_mask = np.array(student_pool)[:,-2] == 1 
     reject = np.array(list(enumerate(student_pool)))[rejects_mask]
     admit = np.array(list(enumerate(student_pool)))[admit_mask]
     sorted_student_pool_reject = sorted(reject,  key = lambda x : x[1][-1])#sort by confidence
     sorted_student_pool_admit = sorted(admit,  key = lambda x : x[1][-1])
+    return sorted_student_pool_reject, sorted_student_pool_admit
+
+def heuristic_select_next_action(anchor, student_pool):
+    '''selects a student based on the anchoring score obtained buy the LSTM'''
+    sorted_student_pool_reject, sorted_student_pool_admit = sort_by_confidence(student_pool)
 
     #print(len(sorted_student_pool_admit), "students to admit.", len(sorted_student_pool_reject), "students to reject")
     if len(sorted_student_pool_admit) == 0:
