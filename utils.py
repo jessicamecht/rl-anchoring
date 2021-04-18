@@ -12,9 +12,9 @@ def load_data():
 
 def normalize(anchor):
     norm_anch = anchor.squeeze()
-    norm_anch -= 2*norm_anch.min(0, keepdim=True)[0]
-    norm_anch /= norm_anch.max(0, keepdim=True)[0]
-    return norm_anch -1
+    norm_anch = norm_anch - norm_anch.min(0, keepdim=True)[0]
+    norm_anch = norm_anch/norm_anch.max(0, keepdim=True)[0]
+    return norm_anch 
 
 def validate(data, valid_keys, target_net, label="validation"):
     '''sends unseen data into the target net and observes the average validation reward on this data'''
@@ -57,8 +57,8 @@ def students_by_year(data, keys, return_len_students=False):
     year = ((np.array(sorted_students)[:,0]-min(np.array(sorted_students)[:,0]))/31557600).astype(int)
     clustered_reviews_by_year = np.split(sorted_students, np.unique(year, return_index=True)[1][1:])
     clustered_reviews_by_year = np.array(clustered_reviews_by_year)
-    return clustered_reviews_by_year, len(sorted_students) if return_len_students else clustered_reviews_by_year
-
+    return clustered_reviews_by_year
+    
 def all_students_sorted_by_year(data, keys):
     all_students = []
     for reviewer in data:
