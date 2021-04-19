@@ -141,15 +141,10 @@ def plot_n_decisions_vs_confidence(review_sessions, figname='./figures/resampled
     for inter in scoresByInterval:
         averageScoresByInterval[inter] = sum(scoresByInterval[inter]) / len(scoresByInterval[inter])
     
-
     keyNames = ["0", "1", "2", "3", "4", "5", "6-10", "11-20", "> 20"]
     keyNames = [name for name in keyNames if name in list(averageScoresByInterval.keys())]
-    print(keyNames)
     ks = list(range(len(keyNames)))
-
     values = [averageScoresByInterval[kn] for kn in keyNames]
-    print(ks,values)
-
     plt.xticks(ks,keyNames)
     plt.xlabel("Numbers of decisions since last accept")
     plt.ylabel("average SVM confidence of accepted file")
@@ -164,3 +159,55 @@ def analyze_data(norm_anch, reviewer_decision, svm_decision, review_session):
     admission = np.array(review_session)[:,2]
     df['admission'] = admission
     print(df)
+
+def heuristic_resample(data, anchor_lstm, keys):
+    '''input pool of students per year'''
+    '''Pseudocode: 
+    1. create fictional reviewer who reviews a random number of x students where x > 1 and x < 30
+    2. sample one student
+    3. run it through svm
+    4. run through lstm to obtain anchor 
+    5. sample next student based on anchor 
+    6. run sequence through lstm and obtain anchor 
+    7. evauate the average anchor 
+    '''
+    all_students = students_by_year(data, keys)
+    anchor_lstm.eval()
+
+    sum_bias = 0 
+    all_decisions = 0
+    for student_pool_for_year in all_students:
+        while len(student_pool_for_year) > 0:
+            length_of_sequence = min(random.randint(2,30), len(student_pool_for_year))
+            student_sequence = []
+            last_anchor = torch.zeros(1) 
+            anchor = 0
+            for i in range(length_of_sequence):
+
+                remove_idx, student = heuristic_select_next_action(last_anchor, student_pool_for_year)
+                student_sequence.append(student)
+                student_pool_for_year = np.delete(student_pool_for_year, remove_idx, axis=0)
+                
+                hidden_size = 1
+                timestamp, target_decision, final_decision, features, svm_decision, svm_confidence = student
+                hidden_anchor_states = (torch.zeros(1,1,hidden_size).to(device),
+                            torch.zeros(1,1,hidden_size).to(device))
+                svm_decision = np.array(student_sequence)[:,-2]
+                svm_decision = torch.Tensor(np.array(svm_decision, dtype=int))
+
+
+                svm_decision = torch.unsqueeze(torch.unsqueeze(svm_decision, 0), -1).to(device)
+                anchor, _ = anchor_lstm(svm_decision,hidden_anchor_states)
+
+                last_anchor = anchor.squeeze(0)[-1]
+
+                if i == length_of_sequence-1:
+                    
+                    norm_anch = normalize(anchor)
+                    
+                    if torch.isnan(torch.abs(norm_anch).sum()).any():
+                        print(norm_anch, anchor)
+                    sum_bias+= torch.abs(norm_anch).sum()
+                    all_decisions+=anchor.shape[1]
+
+    print("Heuristic Resampled Average Absolute Anchor: ", (sum_bias/all_decisions).item())

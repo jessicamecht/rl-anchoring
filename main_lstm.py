@@ -35,15 +35,12 @@ def main(input_for_lstm="SVM"):
     ### Init Data ###################################
     data = load_data()
     _, _, _, data_instance, _, _ = data["reviewer_0"][0][-1]
-    action_size = len(data_instance)
     keys = np.array(list(data.keys()))
-    n_folds = 10
-    folds = np.array_split(keys, n_folds) #10-fold cross validation 
-
+    folds = np.array_split(keys, 7) #10-fold cross validation 
 
     accuracy_train = []
     accuracy_val = []
-    for i in range(n_folds-2):
+    for i in range(len(folds)):
         print("Fold: ", i)
         ### Load Models ###################################
         input_size = 2 if input_for_lstm == "SVM+Decision" else 1
@@ -66,6 +63,8 @@ def main(input_for_lstm="SVM"):
             accuracy_train.append(acc_train)
             accuracy_val.append(acc_val)
             torch.save(anchor_lstm.state_dict(), f'./state_dicts/anchor_lstm_{input_for_lstm}.pt')
+            print(f'Training accurcy for {i} fold:', acc_train)
+            print(f'Validation accurcy for {i} fold:', acc_val)
     
     print(f'Average training accurcy for {n_folds-2} folds:', np.array(accuracy_train).mean())
     print(f'Average validation accurcy for {n_folds-2} folds:', np.array(accuracy_val).mean())
@@ -76,21 +75,20 @@ def train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn, input
     for each student of the review session, 
     '''
     anchor_lstm.train()
-    num_epochs = 1
-    num_decisions = 0
-    num_correct = 0
-    sum_bias = 0
+    num_epochs = 10
+    
     for epoch in range(num_epochs):
+        num_decisions = 0
+        num_correct = 0
         for reviewer in data:
             cum_reward = 0
             number_reviews = 0
             if reviewer not in train_keys:
                 continue
-            hidden_size=1
             
             for review_session in data[reviewer]:
-                hidden_anchor_states = (torch.zeros(1,1,hidden_size).to(device),
-                            torch.zeros(1,1,hidden_size).to(device)) 
+                hidden_anchor_states = (torch.zeros(1,1,1).to(device),
+                            torch.zeros(1,1,1).to(device)) 
                 if len(review_session) == 1:
                     continue
                 anchor_lstm.zero_grad()
@@ -99,8 +97,6 @@ def train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn, input
                 preds, hidden = anchor_lstm(lstm_input,hidden_anchor_states)
 
                 preds = preds.squeeze(0).to(device)
-                #preds = anchor.squeeze(0) * svm_decision_one_hot
-
                 loss_ll = loss_fn(preds, reviewer_decision)
                 loss_ll.backward()
                 anchor_optimizer.step()
@@ -108,8 +104,7 @@ def train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn, input
                 ### Accuracy ##########################################
                 decisions = torch.argmax(preds, dim=1) == reviewer_decision
                 correct = decisions.sum().item()
-                all_decisions = len(decisions)
-                num_decisions+= all_decisions
+                num_decisions+= len(decisions)
                 num_correct += correct
     return num_correct/num_decisions
 
@@ -117,17 +112,14 @@ def eval_anchor(data, eval_keys, anchor_lstm, input_for_lstm):
     anchor_lstm.eval()
     num_decisions = 0
     num_correct = 0
-    sum_bias = 0
     for reviewer in data:
         cum_reward = 0
         number_reviews = 0
         if reviewer not in eval_keys:
-            continue
-        hidden_size=1
-            
+            continue            
         for review_session in data[reviewer]:
-            hidden_anchor_states = (torch.zeros(1,1,hidden_size).to(device),
-                            torch.zeros(1,1,hidden_size).to(device))
+            hidden_anchor_states = (torch.zeros(1,1,1).to(device),
+                            torch.zeros(1,1,1).to(device))
             if len(review_session) == 1:
                 continue
 
@@ -141,8 +133,7 @@ def eval_anchor(data, eval_keys, anchor_lstm, input_for_lstm):
             all_decisions = len(decisions)
             num_decisions+= all_decisions
             num_correct += correct
-            #sum_bias+= torch.abs(norm_anch).sum()
-    return num_correct/num_decisions #"Average Absolute Anchor: ", sum_bias.item()/num_decisions)
+    return num_correct/num_decisions 
 
 
 if __name__ == "__main__":

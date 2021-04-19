@@ -16,59 +16,6 @@ eps_start = 0.9
 eps_end = 0.05
 eps_decay = 200
 
-
-def heuristic_resample(data, anchor_lstm, keys):
-    '''input pool of students per year'''
-    '''Pseudocode: 
-    1. create fictional reviewer who reviews a random number of x students where x > 1 and x < 30
-    2. sample one student
-    3. run it through svm
-    4. run through lstm to obtain anchor 
-    5. sample next student based on anchor 
-    6. run sequence through lstm and obtain anchor 
-    7. evauate the average anchor 
-    '''
-    all_students = students_by_year(data, keys)
-    anchor_lstm.eval()
-
-    sum_bias = 0 
-    all_decisions = 0
-    for student_pool_for_year in all_students:
-        while len(student_pool_for_year) > 0:
-            length_of_sequence = min(random.randint(2,30), len(student_pool_for_year))
-            student_sequence = []
-            last_anchor = torch.zeros(1) 
-            anchor = 0
-            for i in range(length_of_sequence):
-
-                remove_idx, student = heuristic_select_next_action(last_anchor, student_pool_for_year)
-                student_sequence.append(student)
-                student_pool_for_year = np.delete(student_pool_for_year, remove_idx, axis=0)
-                
-                hidden_size = 1
-                timestamp, target_decision, final_decision, features, svm_decision, svm_confidence = student
-                hidden_anchor_states = (torch.zeros(1,1,hidden_size).to(device),
-                            torch.zeros(1,1,hidden_size).to(device))
-                svm_decision = np.array(student_sequence)[:,-2]
-                svm_decision = torch.Tensor(np.array(svm_decision, dtype=int))
-
-
-                svm_decision = torch.unsqueeze(torch.unsqueeze(svm_decision, 0), -1).to(device)
-                anchor, _ = anchor_lstm(svm_decision,hidden_anchor_states)
-
-                last_anchor = anchor.squeeze(0)[-1]
-
-                if i == length_of_sequence-1:
-                    
-                    norm_anch = normalize(anchor)
-                    
-                    if torch.isnan(torch.abs(norm_anch).sum()).any():
-                        print(norm_anch, anchor)
-                    sum_bias+= torch.abs(norm_anch).sum()
-                    all_decisions+=anchor.shape[1]
-
-    print("Heuristic Resampled Average Absolute Anchor: ", (sum_bias/all_decisions).item())
-
 def compute_returns(next_value, rewards, masks, gamma=0.99):
     R = next_value
     returns = []
@@ -78,7 +25,7 @@ def compute_returns(next_value, rewards, masks, gamma=0.99):
     return returns
 
 def anchor_reward(anchors):
-    return (1 - torch.abs(anchors)).sum() # 1 if anchors are 0, 0 if anchors are 1,-1
+    return (1 - torch.abs(anchors)).sum()
 
 def select_action(output, eps_end, eps_start, eps_decay, steps_done):
     '''selects the next action to be executed based on the current student shown
@@ -117,26 +64,21 @@ def train_learned_resampling(data, keys, keys_valid, n_iters, anchor_lstm, input
 
 
     for iteration in range(n_iters):
-        sum_bias = 0 
         all_decisions = 0
-        
         steps_done=0
 
         review_sessions = []
         for year in range(max(all_students[:,0])):
 
             all_students_mask = get_student_mask(all_students_train, all_students_val)
-
-            hidden_size=1
-            hidden_anchor_state = (torch.zeros(1,1,hidden_size).to(device), torch.zeros(1,1,hidden_size).to(device))#initial anchor 
-            #sample random student 
             all_students_mask = np.logical_and(np.array(all_students_mask), (np.array(all_students[:,0]) == year))
             possible_students = all_students[all_students_mask]
+
             while len(possible_students) > 0:
+
+                hidden_anchor_state = (torch.zeros(1,1,1).to(device), torch.zeros(1,1,1).to(device))#initial anchor 
                 length_of_sequence = min(random.randint(2,30), len(all_students))
-
                 student_sequence = []
-
                 student = possible_students[0]
                 student_sequence.append(student)
 
@@ -179,7 +121,6 @@ def train_learned_resampling(data, keys, keys_valid, n_iters, anchor_lstm, input
                     values.append(value.squeeze(2))
                     masks.append(torch.tensor([1-done], dtype=torch.float, device=device))
                 review_sessions.append(student_sequence)
-                sum_bias += torch.abs(normalize(state)).sum()
                 all_decisions +=  len(state.squeeze(0))
                 next_state = state
                 next_value = critic(next_state)
@@ -200,7 +141,6 @@ def train_learned_resampling(data, keys, keys_valid, n_iters, anchor_lstm, input
                 critic_loss.backward()
                 optimizerA.step()
                 optimizerC.step()
-            #print("Training Average Absolute Anchor: ", sum_bias/all_decisions)
 
     plot_n_decisions_vs_confidence(review_sessions, f"./figures/resampled_confidence_at_end_of_training_{input_for_lstm}_{fold}.png")
     return actor
@@ -223,7 +163,6 @@ def eval_learned_resampling(data, keys, keys_valid, anchor_lstm, actor, input_fo
     anchor_lstm.eval()
     actor.eval()
 
-    sum_bias = 0 
     all_decisions = 0
     steps_done = 200
 
@@ -231,47 +170,39 @@ def eval_learned_resampling(data, keys, keys_valid, anchor_lstm, actor, input_fo
 
     for year in range(max(all_students[:,0])):
 
-        all_students_mask = get_student_mask(all_students_train, all_students_val, val=True)
-        length_of_sequence = min(random.randint(2,30), len(all_students))
-        student_sequence = []
-        #sample random student 
-        all_students_mask = np.logical_and(np.array(all_students_mask), (np.array(all_students[:,1]) == year))
-        possible_students = all_students[all_students_mask]
+            all_students_mask = get_student_mask(all_students_train, all_students_val, val=True)
+            all_students_mask = np.logical_and(np.array(all_students_mask), (np.array(all_students[:,0]) == year))
+            possible_students = all_students[all_students_mask]
 
-        if len(possible_students) == 0:
-            break
+            while len(possible_students) > 0:
+                hidden_anchor_state = (torch.zeros(1,1,1).to(device), torch.zeros(1,1,1).to(device))#initial anchor 
+                length_of_sequence = min(random.randint(2,30), len(all_students))
+                student_sequence = []
+                student = possible_students[0]
+                student_sequence.append(student)
 
-        student = possible_students[0]
-        student_sequence.append(student)
-        while len(possible_students) > 0:
-            length_of_sequence = min(random.randint(2,30), len(all_students))
-            student_sequence = []
-            student = possible_students[0] #take first student that comes up 
-            student_sequence.append(student)
-            hidden_anchor_state = (torch.zeros(1,1,1).to(device), torch.zeros(1,1,1).to(device))#initial anchor 
-            for i in range(length_of_sequence):
-                lstm_input, reviewer_decision = get_input_output_data(student_sequence, input_for_lstm)
+                for i in range(length_of_sequence):
+                    steps_done+=1
+                    lstm_input, reviewer_decision = get_input_output_data(student_sequence, input_for_lstm)
 
-                with torch.no_grad():
-                    predictions, (state, _) = anchor_lstm(lstm_input,hidden_anchor_state)
-                #get probability for action and critic given anchor 
-                output = actor(state[:,-1:,:])
+                    with torch.no_grad():
+                        predictions, (state, _) = anchor_lstm(lstm_input,hidden_anchor_state)
+                    #get probability for action and critic given anchor 
+                    output = actor(state[:,-1:,:])
+                    #eliminate impossible actions (already sampled students and students from a different year)
+                    valid_output = output * torch.tensor(all_students_mask).to(device)
+                    #Select student to be sampled
+                    action_idx = select_action(valid_output,eps_end, eps_start, eps_decay, steps_done).item()
+                    next_student = all_students[action_idx]
 
-                #eliminate impossible actions (already sampled students and students from a different year)
-                valid_output = output * torch.tensor(all_students_mask).to(device)
-                #Select student to be sampled
-                action_idx = select_action(valid_output,eps_end, eps_start, eps_decay, steps_done).item()
-                next_student = all_students[action_idx]
+                    student_sequence.append(next_student)
+                    #remove the student s.t. he can't be sampled again  
+                    all_students_mask[action_idx] = False
+                    possible_students = all_students[all_students_mask]
 
-                student_sequence.append(next_student)
-                #remove the student s.t. he can't be sampled again  
-                all_students_mask[action_idx] = False
-                possible_students = all_students[all_students_mask]
-
-            review_sessions.append(student_sequence)
-            sum_bias += torch.abs(normalize(state)).sum()
-            all_decisions +=  len(state.squeeze(0))
-        plot_n_decisions_vs_confidence(review_sessions, figname=f'./figures/validation_confidence_{input_for_lstm}_{fold}.png')
+                review_sessions.append(student_sequence)
+                all_decisions +=  len(state.squeeze(0))
+    plot_n_decisions_vs_confidence(review_sessions, figname=f'./figures/validation_confidence_{input_for_lstm}_{fold}.png')
 
 def main(input_for_lstm, n_iters=1):
     ### Load data #######################
@@ -284,17 +215,15 @@ def main(input_for_lstm, n_iters=1):
     anchor_lstm = AnchorLSTM(input_size, hidden_size).to(device)
     anchor_lstm.load_state_dict(torch.load(f'./state_dicts/anchor_lstm_{input_for_lstm}.pt'))
     
-    
-    n_folds = 10
-    folds = np.array_split(keys, n_folds) #10-fold cross validation 
-    for i in range(n_folds-1):
+    folds = np.array_split(keys, 7) #10-fold cross validation 
+    for i in range(len(folds)):
         print("Fold: ", i)
         train_keys = [item for sublist in folds[0:i] for item in sublist]  + [item for sublist in folds[i+2:] for item in sublist] if len(folds) > i+2 else [] 
         valid_keys = folds[i] 
         test_keys = folds[i+1]
-        if train_keys != []:
-            actor = train_learned_resampling(data, train_keys, valid_keys, n_iters, anchor_lstm, input_for_lstm, i)
-            eval_learned_resampling(data, train_keys, valid_keys, anchor_lstm, actor, input_for_lstm, i)
+
+        actor = train_learned_resampling(data, train_keys, valid_keys, n_iters, anchor_lstm, input_for_lstm, i)
+        eval_learned_resampling(data, train_keys, valid_keys, anchor_lstm, actor, input_for_lstm, i)
 
 if __name__ == "__main__":
     main("SVM")

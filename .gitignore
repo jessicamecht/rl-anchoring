@@ -1,0 +1,5 @@
+figures/
+state_dicts/
+__pycache__/
+.vscode/
+models/__pycache__/
