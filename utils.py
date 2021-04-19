@@ -54,6 +54,27 @@ def get_input_output_data(review_session, input_for_lstm):
     lstm_input = transform_lstm_input(input_for_lstm, svm_decision, svm_decision)
     return lstm_input, reviewer_decision
 
+def correlation(review_sessions):
+    '''mearures the correlation between the number of decisions since last accept 
+    and the actual decision'''
+    #timestamp, target_decision, final_decision, features, svm_decision, svm_confidence = student
+    decision = []
+    number_steps_since_admission = []
+    for session in review_sessions:
+        decision.extend(np.array(session)[:,1])
+        n_steps = 0
+        for student in session:
+            timestamp, target_decision, final_decision, features, svm_decision, svm_confidence = student
+            if target_decision > 1:
+                n_steps = 0
+            else:
+                n_steps+=1
+            number_steps_since_admission.append(n_steps)
+    assert(len(decision) == len(number_steps_since_admission))
+    r = np.corrcoef(decision, number_steps_since_admission)
+    print("Correlation between decisions and the number of steps since last admission", r)
+
+
 def transform_lstm_input(input_for_lstm, svm_decision, previous_decisions):
     if input_for_lstm == "SVM+Decision":
         svm_decision, previous_decisions = torch.unsqueeze(svm_decision, 1), torch.unsqueeze(previous_decisions, 1)

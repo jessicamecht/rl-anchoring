@@ -142,6 +142,7 @@ def train_learned_resampling(data, keys, keys_valid, n_iters, anchor_lstm, input
                 optimizerA.step()
                 optimizerC.step()
 
+    correlation(review_sessions)
     plot_n_decisions_vs_confidence(review_sessions, f"./figures/resampled_confidence_at_end_of_training_{input_for_lstm}_{fold}.png")
     return actor
 
@@ -202,6 +203,7 @@ def eval_learned_resampling(data, keys, keys_valid, anchor_lstm, actor, input_fo
 
                 review_sessions.append(student_sequence)
                 all_decisions +=  len(state.squeeze(0))
+    correlation(review_sessions)
     plot_n_decisions_vs_confidence(review_sessions, figname=f'./figures/validation_confidence_{input_for_lstm}_{fold}.png')
 
 def main(input_for_lstm, n_iters=1):
@@ -211,21 +213,22 @@ def main(input_for_lstm, n_iters=1):
     action_size = len(data_instance)
     keys = np.array(list(data.keys()))
     
-    hidden_size, input_size = 1, 1
+    input_size, hidden_size = 2 if input_for_lstm == "SVM+Decision" else 1, 1
     anchor_lstm = AnchorLSTM(input_size, hidden_size).to(device)
     anchor_lstm.load_state_dict(torch.load(f'./state_dicts/anchor_lstm_{input_for_lstm}.pt'))
     
     folds = np.array_split(keys, 7) #10-fold cross validation 
     for i in range(len(folds)):
         print("Fold: ", i)
-        train_keys = [item for sublist in folds[0:i] for item in sublist]  + [item for sublist in folds[i+2:] for item in sublist] if len(folds) > i+2 else [] 
+        train_keys_1 = [item for sublist in folds[0:i] for item in sublist] if i > 0 else []  
+        train_keys_2 = [item for sublist in folds[i+1:] for item in sublist] if len(folds) > i+1 else [] 
+        train_keys = train_keys_2 + train_keys_1
         valid_keys = folds[i] 
-        test_keys = folds[i+1]
 
         actor = train_learned_resampling(data, train_keys, valid_keys, n_iters, anchor_lstm, input_for_lstm, i)
         eval_learned_resampling(data, train_keys, valid_keys, anchor_lstm, actor, input_for_lstm, i)
 
 if __name__ == "__main__":
+    main("SVM+Decision")
     main("SVM")
     main("Decision")
-    main("SVM+Decision")

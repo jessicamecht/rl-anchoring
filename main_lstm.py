@@ -8,7 +8,6 @@ from models.models import *
 import csv 
 from utils import * 
 import numpy as np
-import matplotlib.pyplot as plt 
 import operator
 import random 
 import pandas as pd
@@ -34,9 +33,9 @@ def main(input_for_lstm="SVM"):
     print("Evaluating input for LSTM:", input_for_lstm)
     ### Init Data ###################################
     data = load_data()
-    _, _, _, data_instance, _, _ = data["reviewer_0"][0][-1]
+    timestep, _, _, data_instance, _, _ = data["reviewer_0"][0][-1]
     keys = np.array(list(data.keys()))
-    folds = np.array_split(keys, 7) #10-fold cross validation 
+    folds = np.array_split(keys, 10) #10-fold cross validation 
 
     accuracy_train = []
     accuracy_val = []
@@ -52,9 +51,10 @@ def main(input_for_lstm="SVM"):
         anchor_optimizer = optim.Adam(anchor_lstm.parameters(), lr=0.01)
 
         ### Train and Valid Keys ###################################
-        train_keys = [item for sublist in folds[0:i] for item in sublist]  + [item for sublist in folds[i+2:] for item in sublist] if len(folds) > i+2 else [] 
+        train_keys_1 = [item for sublist in folds[0:i] for item in sublist] if i > 0 else []  
+        train_keys_2 = [item for sublist in folds[i+1:] for item in sublist] if len(folds) > i+1 else [] 
+        train_keys = train_keys_2 + train_keys_1
         valid_keys = folds[i] 
-        test_keys = folds[i+1]
         if train_keys != []:
     
             acc_train = train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn, input_for_lstm)
@@ -66,8 +66,8 @@ def main(input_for_lstm="SVM"):
             print(f'Training accurcy for {i} fold:', acc_train)
             print(f'Validation accurcy for {i} fold:', acc_val)
     
-    print(f'Average training accurcy for {n_folds-2} folds:', np.array(accuracy_train).mean())
-    print(f'Average validation accurcy for {n_folds-2} folds:', np.array(accuracy_val).mean())
+    print(f'Average training accurcy for {len(folds)} folds:', np.array(accuracy_train).mean())
+    print(f'Average validation accurcy for {len(folds)} folds:', np.array(accuracy_val).mean())
 
 def train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn, input_for_lstm):
     '''main training function 
@@ -85,7 +85,7 @@ def train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn, input
             number_reviews = 0
             if reviewer not in train_keys:
                 continue
-            
+
             for review_session in data[reviewer]:
                 hidden_anchor_states = (torch.zeros(1,1,1).to(device),
                             torch.zeros(1,1,1).to(device)) 
@@ -112,6 +112,7 @@ def eval_anchor(data, eval_keys, anchor_lstm, input_for_lstm):
     anchor_lstm.eval()
     num_decisions = 0
     num_correct = 0
+    review_sessions = []
     for reviewer in data:
         cum_reward = 0
         number_reviews = 0
@@ -126,13 +127,15 @@ def eval_anchor(data, eval_keys, anchor_lstm, input_for_lstm):
             lstm_input, reviewer_decision = get_input_output_data(review_session, input_for_lstm)
             preds, _ = anchor_lstm(lstm_input,hidden_anchor_states)
 
-            preds = preds.squeeze(0).to(device)
+            preds = preds.squeeze(0)
             ### Accuracy ##########################################
             decisions = torch.argmax(preds, dim=1) == reviewer_decision
             correct = decisions.sum().item()
             all_decisions = len(decisions)
             num_decisions+= all_decisions
             num_correct += correct
+            review_sessions.append(review_session)
+    correlation(review_sessions)
     return num_correct/num_decisions 
 
 
