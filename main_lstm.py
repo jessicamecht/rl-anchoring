@@ -62,14 +62,13 @@ def main(input_for_lstm="SVM"):
     
             acc_train = train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn, input_for_lstm)
             acc_val = eval_anchor(data, valid_keys, anchor_lstm, input_for_lstm)
+
             accuracy_train.append(acc_train)
             accuracy_val.append(acc_val)
-            torch.save(anchor_lstm.state_dict(), './state_dicts/anchor_lstm.pt')
+            torch.save(anchor_lstm.state_dict(), f'./state_dicts/anchor_lstm_{input_for_lstm}.pt')
     
     print(f'Average training accurcy for {n_folds-2} folds:', np.array(accuracy_train).mean())
-    print(f'Average training accurcy for {n_folds-2} folds:', np.array(accuracy_val).mean())
-            #heuristic_resample(data, anchor_lstm, valid_keys)
-            #train_learned_resampling(data, train_keys, n_iters, anchor_lstm, action_size)
+    print(f'Average validation accurcy for {n_folds-2} folds:', np.array(accuracy_val).mean())
 
 def train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn, input_for_lstm):
     '''main training function 
@@ -96,20 +95,7 @@ def train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn, input
                     continue
                 anchor_lstm.zero_grad()
 
-                ### SVM Score for Student ####################################
-                svm_decision = np.array(review_session)[:,-2]
-                svm_decision = torch.Tensor(np.array(svm_decision, dtype=int))
-
-                svm_decision_one_hot = torch.nn.functional.one_hot(svm_decision.to(torch.int64), num_classes=2).to(device)
-
-                ### Reviewer Decisions for Students ####################################
-                reviewer_decision = torch.Tensor(np.array(review_session)[:,1] > 1).to(device).to(torch.int64) 
-
-                ### Previous Decisions Score for Student ####################################
-                previous_decisions = torch.tensor(np.concatenate((np.array([0]), np.array(review_session)[1:,1] > 1)))
-
-                lstm_input = transform_lstm_input(input_for_lstm, svm_decision, svm_decision)
-                
+                lstm_input, reviewer_decision = get_input_output_data(review_session, input_for_lstm)
                 preds, hidden = anchor_lstm(lstm_input,hidden_anchor_states)
 
                 preds = preds.squeeze(0).to(device)
@@ -126,19 +112,6 @@ def train_anchor(data, train_keys, anchor_lstm, anchor_optimizer, loss_fn, input
                 num_decisions+= all_decisions
                 num_correct += correct
     return num_correct/num_decisions
-
-def transform_lstm_input(input_for_lstm, svm_decision, previous_decisions):
-    if input_for_lstm == "SVM+Decision":
-        svm_decision, previous_decisions = torch.unsqueeze(svm_decision, 1), torch.unsqueeze(previous_decisions, 1)
-        lstm_input = torch.cat((svm_decision, previous_decisions), dim=1)
-        lstm_input = torch.unsqueeze(lstm_input, 0).to(device)
-    elif input_for_lstm == "SVM":
-        lstm_input = svm_decision
-        lstm_input = torch.unsqueeze(torch.unsqueeze(lstm_input, 0), -1).to(device)
-    elif input_for_lstm == "Decision":
-        lstm_input = previous_decisions.to(torch.float)
-        lstm_input = torch.unsqueeze(torch.unsqueeze(lstm_input, 0), -1).to(device)
-    return lstm_input
 
 def eval_anchor(data, eval_keys, anchor_lstm, input_for_lstm):
     anchor_lstm.eval()
@@ -158,28 +131,9 @@ def eval_anchor(data, eval_keys, anchor_lstm, input_for_lstm):
             if len(review_session) == 1:
                 continue
 
-            svm_decision = np.array(review_session)[:,-2]
-            svm_decision = torch.Tensor(np.array(svm_decision, dtype=int))
-
-            svm_decision_one_hot = torch.nn.functional.one_hot(svm_decision.to(torch.int64), num_classes=2).to(device)
-
-            reviewer_decision = torch.Tensor(np.array(review_session)[:,1] > 1).to(device).to(torch.int64)
-
-            previous_decisions = torch.tensor(np.concatenate((np.array([0]), np.array(review_session)[1:,1] > 1)))
-
-            lstm_input = transform_lstm_input(input_for_lstm, svm_decision, previous_decisions)
-
+            lstm_input, reviewer_decision = get_input_output_data(review_session, input_for_lstm)
             preds, _ = anchor_lstm(lstm_input,hidden_anchor_states)
 
-            '''Analyze data
-            df = pd.DataFrame(norm_anch.cpu().detach().numpy(), columns = ['norm_anchor'])
-            df['reviewer_decision'] = reviewer_decision.cpu()
-            df['svm_decision'] = svm_decision.squeeze().cpu()
-            admission = np.array(review_session)[:,2]
-            df['admission'] = admission
-            print(df)'''
-
-            #preds = anchor.squeeze(0) * svm_decision_one_hot
             preds = preds.squeeze(0).to(device)
             ### Accuracy ##########################################
             decisions = torch.argmax(preds, dim=1) == reviewer_decision
